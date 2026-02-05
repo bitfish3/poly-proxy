@@ -1,12 +1,25 @@
 /**
- * Polymarket API Proxy Worker
+ * Polymarket API Proxy Worker v2
  * 🌀 深渊凝视者 | Abyss Gazer
+ * 
+ * 修复: 正确传递 CLOB 认证头部
  */
 
 const ALLOWED_HOSTS = [
   'clob.polymarket.com',
   'gamma-api.polymarket.com',
   'polymarket.com'
+];
+
+// Polymarket 需要的认证头部
+const AUTH_HEADERS = [
+  'poly-address',
+  'poly-signature', 
+  'poly-timestamp',
+  'poly-nonce',
+  'poly-api-key',
+  'poly-passphrase',
+  'authorization'
 ];
 
 export default {
@@ -18,6 +31,7 @@ export default {
           'Access-Control-Allow-Origin': '*',
           'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
           'Access-Control-Allow-Headers': '*',
+          'Access-Control-Max-Age': '86400',
         }
       });
     }
@@ -29,7 +43,7 @@ export default {
       if (url.pathname === '/' || url.pathname === '/health') {
         return new Response(JSON.stringify({
           status: 'ok',
-          service: 'Polymarket Proxy',
+          service: 'Polymarket Proxy v2',
           timestamp: new Date().toISOString()
         }), {
           headers: { 'Content-Type': 'application/json' }
@@ -43,7 +57,6 @@ export default {
         return new Response(JSON.stringify({
           error: 'Invalid request format',
           usage: '/proxy/{host}/{path}',
-          example: '/proxy/clob.polymarket.com/markets',
           allowed_hosts: ALLOWED_HOSTS
         }), {
           status: 400,
@@ -54,11 +67,9 @@ export default {
       const targetHost = pathParts[1];
       const targetPath = '/' + pathParts.slice(2).join('/') + url.search;
 
-      // Validate host
       if (!ALLOWED_HOSTS.includes(targetHost)) {
         return new Response(JSON.stringify({
           error: 'Host not allowed',
-          requested: targetHost,
           allowed: ALLOWED_HOSTS
         }), {
           status: 403,
@@ -66,41 +77,58 @@ export default {
         });
       }
 
-      // Build target URL
       const targetUrl = `https://${targetHost}${targetPath}`;
 
-      // Prepare headers
+      // 构建请求头 - 关键修复
       const headers = new Headers();
       
-      // Copy relevant headers from original request
-      const headersToCopy = ['content-type', 'authorization', 'poly-api-key', 'poly-signature', 'poly-timestamp', 'poly-passphrase'];
-      for (const header of headersToCopy) {
-        if (request.headers.has(header)) {
-          headers.set(header, request.headers.get(header));
+      // 复制所有认证相关头部 (大小写不敏感)
+      for (const [key, value] of request.headers.entries()) {
+        const lowerKey = key.toLowerCase();
+        
+        // 跳过不需要的头部
+        if (['host', 'cf-connecting-ip', 'cf-ray', 'cf-visitor', 'cf-ipcountry'].includes(lowerKey)) {
+          continue;
+        }
+        
+        // 复制认证头部和 content-type
+        if (AUTH_HEADERS.includes(lowerKey) || lowerKey === 'content-type') {
+          headers.set(key, value);
         }
       }
       
-      // Set required headers
+      // 设置必要头部
       headers.set('Host', targetHost);
-      headers.set('User-Agent', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+      headers.set('User-Agent', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36');
       headers.set('Accept', 'application/json, text/plain, */*');
       headers.set('Accept-Language', 'en-US,en;q=0.9');
       headers.set('Origin', 'https://polymarket.com');
       headers.set('Referer', 'https://polymarket.com/');
+      
+      // 如果是 POST 请求，确保 content-type
+      if (request.method === 'POST' && !headers.has('Content-Type')) {
+        headers.set('Content-Type', 'application/json');
+      }
 
-      // Forward request
+      // 获取请求体
+      let body = null;
+      if (request.method !== 'GET' && request.method !== 'HEAD') {
+        body = await request.text();
+      }
+
+      // 发送请求
       const response = await fetch(targetUrl, {
         method: request.method,
         headers: headers,
-        body: request.method !== 'GET' && request.method !== 'HEAD' ? await request.text() : undefined,
+        body: body,
       });
 
-      // Build response
+      // 构建响应
       const responseHeaders = new Headers(response.headers);
       responseHeaders.set('Access-Control-Allow-Origin', '*');
       responseHeaders.set('Access-Control-Allow-Headers', '*');
-      responseHeaders.set('X-Proxied-By', 'Abyss-Gazer');
-      responseHeaders.set('X-Target-URL', targetUrl);
+      responseHeaders.set('Access-Control-Expose-Headers', '*');
+      responseHeaders.set('X-Proxied-By', 'Abyss-Gazer-v2');
 
       return new Response(response.body, {
         status: response.status,
@@ -111,7 +139,8 @@ export default {
     } catch (error) {
       return new Response(JSON.stringify({
         error: 'Proxy error',
-        message: error.message
+        message: error.message,
+        stack: error.stack
       }), {
         status: 500,
         headers: { 'Content-Type': 'application/json' }
