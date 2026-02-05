@@ -1,0 +1,6 @@
+name = "poly-proxy"
+main = "src/index.js"
+compatibility_date = "2024-01-01"
+
+[vars]
+ALLOWED_HOSTS = "clob.polymarket.com,gamma-api.polymarket.com"
